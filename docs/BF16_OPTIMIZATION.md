@@ -1,5 +1,7 @@
 # Spark BF16 融合 decode 优化记录
 
+本页保留首轮优化结果。后续以 7.0 ms/token 为目标的 attention、MLP 数据流和无损 BF16 权重编码实验见 [第二轮实验记录](TPOT7_OPTIMIZATION.md)。
+
 ## 约束与基线
 
 - 用户授权保持 BF16 优化，禁止权重量化；允许在不同空闲 NPU 并行实验，禁止 NPU 0。

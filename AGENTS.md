@@ -13,6 +13,7 @@
 - `kernels/` 保存可用算子和公共头文件，原始 mega 版本留存在 `kernels/legacy/`；默认构建只包含 stage_prefetch。
 - `integration/` 保存模型接入，`benchmarks/` 保存基准与分析，`docs/` 保存实验说明，`patches/` 保存补丁。
 - `kernel_optimization/attention/` 是保留候选，`diagnostics/` 是有效诊断工具，`rejected/` 只保留未获收益实验的结论索引。
+- `kernel_optimization/tpot7/` 保存 7.0 ms/token 目标实验、BF16 无损编码、配对基准和验收工具；最终结果见 `docs/TPOT7_OPTIMIZATION.md`。
 - 根目录两个 Python 文件是命令/插件兼容入口。目录导航、整理快照和历史证据位置见 `README.md`。
 
 ## 本机环境
@@ -59,6 +60,8 @@ source /data1/t00995472/spark/activate_ascend.sh
 - 安装脚本、构建日志及安装前后的依赖清单位于 `/data1/t00995472/vllm-install/`。其中 `tmp/` 是激活脚本配置的临时目录，清理后应在运行前重新创建。
 
 ## 验证结果与已知限制
+
+- 2026-10-16 通过 MLP 权重无损编码与精简 VF 解码达到 7.0 ms/token 目标，保持 BF16、无量化。原连续 32K/4K 流程完整预热一次测三次，物理 NPU 2 / 4 的平均 TPOT 为 **6.8202 / 6.8212 ms/token**，各轮 4096 自由生成 token 与原融合基线一致，decode 窗口频率采样均为 1650 MHz。四种上下文共 256 步 logits 与原融合库逐位一致，全 72 个 MLP 矩阵和全部 BF16 码点已通过无损还原验证。候选库 `/data1/t00995472/spark-tpot7/weight_path/lossless_fast/libdecode_layer_stage_prefetch.so`，须保留同目录 `execution.json`，用 `--fused-library` 显式选择；仅支持融合 eager，原始 kernel/默认库未替换。当前保留原重排权重，额外持有约 4.07 GiB 编码权重。NPU 2 交错对照为 7.5551→6.8227 ms（观测下降9.69%），但候选有一条低频采样，不作严格同频结论；连续复验不插入轮间冷却。证据 `/data1/t00995472/spark-tpot7/result-summary.json`，复现、失败实验与限制见 `docs/TPOT7_OPTIMIZATION.md`。
 
 - 已在物理 **NPU 2** 上通过 torch-npu 矩阵运算验证。
 - 已确认 vLLM 激活 Ascend 插件，并通过本地随机权重小模型的端到端生成验证。该测试用于检查推理链路，不用于评估模型质量或性能。

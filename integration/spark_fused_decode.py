@@ -5,6 +5,7 @@ unsupported batches use the original implementation. The outer engine is eager;
 SPARK_FUSED_GRAPH=1 captures the 36 fused layers into an internal NPU graph.
 """
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -25,6 +26,8 @@ def fused_status(model):
             'capacity':state.capacity if state else 0,
             'graph_enabled':bool(state and state.graph_enabled),
             'library':state.library_path if state and state.ready else None,
+            'library_sha256':getattr(state, 'library_sha256', None) if state else None,
+            'weight_encoding':getattr(state, 'weight_encoding', None) if state else None,
             'graph_captures':state.graph_captures if state else 0,
             'graph_replays':state.graph_replays if state else 0}
 
@@ -32,6 +35,23 @@ def fused_status(model):
 class SparkFusedWorkerExtension:
     def spark_fused_status(self):
         return fused_status(self.get_model())
+
+    def spark_fused_select_library(self, path):
+        """Benchmark-only switch after the caller has drained all requests.
+
+        Libraries must preserve the ABI and workspace layout; an explicit
+        manifest selects supported lossless weight packing.
+        Captured graphs cannot change their kernel entrypoints this way.
+        """
+        state = self.get_model().model._spark_fused_state
+        if state.graph_enabled:
+            raise RuntimeError('Library switching requires fused eager mode')
+        state.prepare()
+        torch.npu.synchronize()
+        state.load_library(path)
+        return {'library': state.library_path,
+                'sha256': state.library_sha256,
+                'decode_steps': state.steps}
 
 
 class FusedState:
@@ -99,14 +119,57 @@ class FusedState:
             ptrs=(ctypes.c_void_p*14)(*[0 if t is None else t.data_ptr() for t in tensors])
             self.entries.append(dict(layer=layer,rd=rd,tensors=tensors,ptrs=ptrs,caches=[kc,vc,nk,nv]))
         path=os.environ.get('SPARK_FUSED_LIBRARY','/data1/t00995472/spark-kernel-validation/build/libdecode_layer_stage_prefetch.so')
-        self.library_path=path
-        self.library=ctypes.CDLL(path)
-        self.launch=self.library.launch_decode_layer_stage_prefetch
-        self.launch.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)]+[ctypes.c_void_p]*7+[ctypes.c_int,ctypes.c_int,ctypes.c_float,ctypes.c_float]
-        self.launch.restype=None
+        self.load_library(path)
         torch.npu.synchronize()
         self.ready=True
         print(f'SPARK_FUSED_READY layers=36 capacity={self.capacity} pages={self.pages} library={path}',flush=True)
+
+    def load_library(self, path):
+        path = str(Path(path).resolve(strict=True))
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        loaded_hashes = getattr(self, '_library_hashes', {})
+        if path in loaded_hashes and loaded_hashes[path] != digest:
+            raise RuntimeError('Loaded library changed on disk; use a new immutable build path')
+        library = ctypes.CDLL(path)
+        launch = library.launch_decode_layer_stage_prefetch
+        launch.argtypes = [ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)] + [ctypes.c_void_p]*7 + [ctypes.c_int,ctypes.c_int,ctypes.c_float,ctypes.c_float]
+        launch.restype = None
+        manifest_path = Path(path).parent / 'execution.json'
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        encoding = manifest.get('weight_encoding', 'bf16')
+        if encoding not in ('bf16', 'bf16_lossless12'):
+            raise ValueError(f'Unsupported weight encoding: {encoding}')
+        if manifest.get('workspace_bytes', 128*1024) != 128*1024:
+            raise ValueError('Library requires an unsupported workspace layout')
+        if encoding == 'bf16_lossless12':
+            if manifest.get('codec_base') != 109 or manifest.get('codec_repairs') != 256:
+                raise ValueError('Lossless codec manifest does not match the packer')
+            if self.graph_enabled:
+                raise ValueError('Lossless candidate currently requires fused eager')
+            if not hasattr(self, 'lossless_weights'):
+                from kernel_optimization.tpot7.lossless.codec import pack_weight
+                encoded_weights = []
+                for entry in self.entries:
+                    w1, w2 = entry['tensors'][4:6]
+                    encoded = [pack_weight(w1.cpu(), 2560, 8).to(w1.device),
+                               pack_weight(w2.cpu(), 10240, 4).to(w2.device)]
+                    encoded_weights.append(encoded)
+                torch.npu.synchronize()
+                self.lossless_weights = encoded_weights
+        if hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest:
+            raise RuntimeError('Library changed while loading; use an immutable build path')
+        for i, entry in enumerate(self.entries):
+            weights = self.lossless_weights[i] if encoding == 'bf16_lossless12' else entry['tensors'][4:6]
+            entry['ptrs'][4], entry['ptrs'][5] = [w.data_ptr() for w in weights]
+        # Keep previously loaded binaries alive until the model is destroyed.
+        if not hasattr(self, '_libraries'):
+            self._libraries = {}
+        self._libraries[path] = library
+        loaded_hashes[path] = digest
+        self._library_hashes = loaded_hashes
+        self.library_path, self.library, self.launch = path, library, launch
+        self.library_sha256 = digest
+        self.weight_encoding = encoding
 
     def metadata(self):
         ctx=get_forward_context()

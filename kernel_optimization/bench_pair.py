@@ -17,7 +17,9 @@ s=s.replace('    width=5120 if rd==64 else 128', '''    width=5120 if rd==64 els
     manifest=Path(args.build)/'execution.json'
     candidate=json.loads(manifest.read_text()).get('candidate') if manifest.exists() else None
     if rd==64 and (candidate=='balanced7_all' or (candidate=='balanced7' and args.length<=35840)):
-        width=((args.length+895)//896)*128''')
+        width=((args.length+895)//896)*128
+    elif rd==64 and candidate=='balanced7_tile384':
+        width=((args.length+2687)//2688)*384''')
 injection='''
     import statistics
     baseline_lib=ctypes.CDLL(args.baseline_library)

@@ -1,0 +1,125 @@
+{
+  "objective": "Full-model TPOT <= 7.0 ms/token",
+  "status": "complete",
+  "constraints": {
+    "input_tokens": 32768,
+    "output_tokens": 4096,
+    "dtype": "BF16",
+    "quantization": false,
+    "tensor_parallel": 1,
+    "pipeline_parallel": 1,
+    "batch_size": 1,
+    "speculative_decoding": false,
+    "prefix_caching": false,
+    "window_positions": 513,
+    "preserve_baseline_kernel": true
+  },
+  "artifacts": "/data1/t00995472/spark-tpot7/",
+  "assignments": {
+    "root": {
+      "physical_npu": 2,
+      "scope": "tile-aligned split; independent validation; full-model benchmark"
+    },
+    "attention_pipeline": {
+      "physical_npu": 4,
+      "scope": "buffered scores / attention pipeline"
+    },
+    "mlp_pipeline": {
+      "physical_npu": 6,
+      "scope": "MLP producer-consumer dataflow"
+    },
+    "weight_path": {
+      "physical_npu": 7,
+      "scope": "weight access layout / cache policy"
+    }
+  },
+  "acceptance": [
+    "Real-weight single-layer CPU reference with BF16 boundaries, guards and repeated execution",
+    "Same-prefix full-model logits checks including long-context boundaries",
+    "Same-device full 32768/4096 request, complete warmup, at least three measured requests",
+    "All 4096 output tokens compared to baseline; explicit actual kernel/library hashes and execution counts",
+    "Production timing excludes profiler and logits export; device frequency and temperature captured",
+    "Only mark achieved if full-model measured mean TPOT <= 7.0 ms/token under preserved constraints"
+  ],
+  "experiments": [
+    {
+      "name": "balanced7_tile384",
+      "status": "full_model_measured_small_gain",
+      "evidence": "/data1/t00995472/spark-tpot7/tile384",
+      "single_layer_boundaries": [
+        129,
+        32769,
+        35841,
+        40960
+      ],
+      "single_layer_all_pass": true,
+      "full_model_mean_tpot_ms": {
+        "baseline": {
+          "tpot_ms": 7.552060251354286,
+          "ttft_ms": 1526.7466253523405,
+          "e2e_ms": 32452.43335464814
+        },
+        "candidate": {
+          "tpot_ms": 7.539598568908167,
+          "ttft_ms": 1538.398582333078,
+          "e2e_ms": 32413.05472201202
+        }
+      },
+      "full_output_tokens_equal": true,
+      "target_achieved": false
+    },
+    {
+      "name": "attention_two_pass",
+      "status": "no_material_gain_in_9_KV_rotation",
+      "owner": "attention_pipeline"
+    },
+    {
+      "name": "mlp_local_down",
+      "status": "no_material_gain",
+      "owner": "mlp_pipeline"
+    },
+    {
+      "name": "weight_cache_layout",
+      "status": "no_material_gain_after_rotation",
+      "owner": "weight_path"
+    },
+    {
+      "name": "bf16_lossless12",
+      "status": "accepted_opt_in",
+      "owner": "root/weight_path/mlp_pipeline",
+      "codec_repairs": 256,
+      "mlp_storage_bytes": {
+        "baseline": 5662310400,
+        "encoded": 4368384000
+      },
+      "all_model_weights_bitwise_equal": true,
+      "all_65536_bf16_patterns_verified_on_npu": true,
+      "stable_library": "/data1/t00995472/spark-tpot7/weight_path/lossless256/libdecode_layer_stage_prefetch.so",
+      "fast_library": "/data1/t00995472/spark-tpot7/weight_path/lossless_fast/libdecode_layer_stage_prefetch.so",
+      "stable_short_tokens_equal": true,
+      "stable_full_mean_tpot_ms": 7.519755057048994,
+      "stable_last_round_degraded": true,
+      "fast_same_prefix_logits": {
+        "contexts": [
+          128,
+          32768,
+          35839,
+          40896
+        ],
+        "total_steps": 256,
+        "decode_steps": 252,
+        "all_bits_equal": true
+      },
+      "primary_tpot_ms": 6.8202012889735375,
+      "secondary_tpot_ms": 6.82122911095178,
+      "same_card_observed_tpot_reduction_percent": 9.694181218473574,
+      "strict_same_clock_comparison": false
+    }
+  ],
+  "notes": [
+    "Microbenchmarks screen candidates and do not establish full-model speedup."
+  ],
+  "next_actions": [],
+  "target_achieved": true,
+  "result_summary": "/data1/t00995472/spark-tpot7/result-summary.json"
+}

@@ -10,6 +10,7 @@
 | [benchmarks/](benchmarks/) | 完整模型基准、同卡对照、logits 比较和 profiler 分析 |
 | [kernel_validation/](kernel_validation/) | 单层真实权重校验、兼容检查与必要的同步诊断 |
 | [kernel_optimization/attention/](kernel_optimization/attention/) | 保留的七分片 BF16 attention 候选 |
+| [kernel_optimization/tpot7/](kernel_optimization/tpot7/) | 7.0 ms/token 目标实验、无损 BF16 编码、交错基准与审计；见 [实验记录](docs/TPOT7_OPTIMIZATION.md) |
 | [kernel_optimization/diagnostics/](kernel_optimization/diagnostics/) | 阶段计时和 GM→UB 带宽探针 |
 | [kernel_optimization/rejected/](kernel_optimization/rejected/) | 未取得收益的实验结论与结果索引；冗余脚本已清理 |
 | [patches/](patches/) | 已应用的 Spark/vLLM 兼容与注册补丁 |

@@ -33,9 +33,9 @@ python -B benchmark_spark_vllm.py --enforce-eager
 
 本机 vLLM 0.23.0 / Ascend 0.23.0.post1 需要两份兼容补丁：
 
-- `spark-plugin-vllm023.patch`：按当前 vLLM 参数的 weight_loader 加载 gate/up
+- `patches/spark-plugin-vllm023.patch`：按当前 vLLM 参数的 weight_loader 加载 gate/up
   分片；为 Ascend FIA 的预填充传入连续的 V 张量。
-- `ascend-rope-head-tiling.patch`：RoPE 的 head 分块不超过实际 head 数，
+- `patches/ascend-rope-head-tiling.patch`：RoPE 的 head 分块不超过实际 head 数，
   修复 950PR、head_dim=256 时默认 64-head 分块造成的 UB 溢出。
 
 两份补丁已应用到本机对应源码。重建环境时，在上述精确插件提交及当前 Ascend
@@ -45,7 +45,7 @@ python -B benchmark_spark_vllm.py --enforce-eager
 source /data1/t00995472/spark/activate_ascend.sh
 unset DEBUG
 python -m pip install --no-deps --no-build-isolation -e /data1/t00995472/vllm-install/Spark-plugin
-python -B check_spark_compat.py --npu 4
+python -B kernel_validation/check_spark_compat.py --npu 4
 ```
 
 已通过 MLP 分片加载与 RoPE 数值检查，并在物理 NPU 4 上通过完整权重
@@ -180,7 +180,7 @@ python -B benchmark_spark_vllm.py --npu 4 --enforce-eager --result /data1/t00995
 python -B benchmark_spark_vllm.py --npu 4 --result /data1/t00995472/spark-benchmark/graph-new.json
 python -B benchmark_spark_vllm.py --npu 4 --enforce-eager --runs 1 --profile-dir /data1/t00995472/spark-benchmark/profile-eager-new --result /data1/t00995472/spark-benchmark/profile-eager-new.json
 python -B benchmark_spark_vllm.py --npu 4 --runs 1 --profile-dir /data1/t00995472/spark-benchmark/profile-graph-new --result /data1/t00995472/spark-benchmark/profile-graph-new.json
-python -B analyze_spark_profiles.py /data1/t00995472/spark-benchmark/eager-graph-20261016
+python -B benchmarks/analyze_spark_profiles.py /data1/t00995472/spark-benchmark/eager-graph-20261016
 ```
 
 `--profile-output-tokens` 默认 128，只改变采集请求长度，完整预热仍使用 `--output-tokens`。
@@ -189,3 +189,29 @@ python -B analyze_spark_profiles.py /data1/t00995472/spark-benchmark/eager-graph
 汇总工具直接读取原始 CSV，输出 `analysis.json`；
 `launch-analysis.json` 保存本轮另行提取的 runtime API 数量。
 Chrome/Perfetto 时间线位于各采集目录的 `ASCEND_PROFILER_OUTPUT/trace_view.json`。
+
+## 2026-10-16 完整模型融合 decode 实测
+
+已将 `decode_layer_stage_prefetch.asc` 接入完整 Spark-X2.5-4B。同一物理 NPU 2，
+BF16、TP=1、batch=1、32768 输入 / 4096 输出，完整预热一次后测三次：
+
+| 指标 | 原 eager | 原图执行 | 融合 eager |
+| --- | ---: | ---: | ---: |
+| 平均 TPOT（ms/token） | 12.210 | 11.051 | 7.556 |
+| 平均 TTFT（ms） | 1485.388 | 1613.392 | 1529.775 |
+| 平均 E2E（s） | 51.485 | 46.866 | 32.470 |
+
+相对原图执行，生成速度提升 1.463 倍，TPOT 降低 31.63%；相对 eager 提升 1.616 倍。
+三组各三轮的全部 4096 个输出 token 均一致。融合仍使用 eager，prefill 和 LM head
+沿用原实现，历史 KV 转换计入请求耗时；重排权重在初始化阶段准备。
+
+```bash
+python -B benchmark_spark_vllm.py --npu 2 --enforce-eager --fused-decode \
+  --result /data1/t00995472/spark-fused-benchmark/new-fused.json
+```
+
+当前仅支持单请求、BF16、TP=PP=1、总上下文≤40960、block=128，并关闭前缀缓存和推测解码。
+该适配增加约 13.38 GiB 非框架 KV 占用。全进程活跃采样中 eager 有 1 次低频，
+图执行有 10 次低频，融合未采到低频；顺序运行，未作同频校准。
+完整结果、数值验证、内存成本和复现见 [FUSED_DECODE.md](FUSED_DECODE.md)，
+原始证据位于 `/data1/t00995472/spark-fused-benchmark/`。

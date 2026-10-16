@@ -9,12 +9,12 @@ import json
 from pathlib import Path
 import subprocess
 
-root=Path(__file__).resolve().parents[1]
+root=Path(__file__).resolve().parents[2]
 p=argparse.ArgumentParser()
 p.add_argument('--output',required=True)
 a=p.parse_args()
 out=Path(a.output);out.mkdir(parents=True,exist_ok=True)
-s=(root/'decode_layer_stage_prefetch.asc').read_text()
+s=(root/'kernels/decode_layer_stage_prefetch.asc').read_text()
 s=s[:s.index('extern "C" __global__')]
 s=s.replace('// The first tile was loaded by O projection before its final GEMV.',
             '// Independent diagnostic launch: explicitly load the first tile.\n DataCopy(first,b[(int64_t)start*K],M*K);')
@@ -44,6 +44,6 @@ for name,n in zip(stages,[28,28,16,56,56,56,1]):
     s+=f'check_{name}<<<{n},nullptr,s>>>(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8],a[9],a[10],a[11],a[12],a[13],kc,vc,nk,nv,ws,y,resout,rd,slot32,e1,e2);\n'
 s+='}\n'
 target=out/'decode_layer_stage_prefetch.asc';target.write_text(s)
-cmd=['bisheng','--npu-arch=dav-3510','-fPIC','-shared','-I'+str(root),str(target),'-o',str(out/'libdecode_layer_stage_prefetch.so'),'-lascendcl']
+cmd=['bisheng','--npu-arch=dav-3510','-fPIC','-shared','-I'+str(root/'kernels'),str(target),'-o',str(out/'libdecode_layer_stage_prefetch.so'),'-lascendcl']
 print(' '.join(cmd),flush=True);subprocess.run(cmd,check=True)
 (out/'execution.json').write_text(json.dumps({'execution':'diagnostic_seven_launch_chain','changes':['replace inter-stage global barriers with launch boundaries','load first FFN tile instead of carrying UB prefetch across launches']},indent=2))

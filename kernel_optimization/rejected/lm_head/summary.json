@@ -1,0 +1,474 @@
+{
+  "physical_npu": 6,
+  "standalone_means_us": {
+    "m4": 491.9930171966553,
+    "m8": 499.05959765116376,
+    "m16": 494.0562693277995,
+    "m8cache": 492.3262468973796,
+    "m8c28": 485.8370431264242,
+    "m8c112": 482.62586911519367,
+    "torch_linear": 492.13199615478516
+  },
+  "standalone_min_max_us": {
+    "m4": [
+      491.4482116699219,
+      494.1473960876465
+    ],
+    "m8": [
+      498.5740025838216,
+      499.52224095662433
+    ],
+    "m16": [
+      493.52426528930664,
+      494.36365763346356
+    ],
+    "m8cache": [
+      492.03195571899414,
+      492.6499366760254
+    ],
+    "m8c28": [
+      485.30508677164715,
+      486.4792823791504
+    ],
+    "m8c112": [
+      482.2163899739583,
+      483.5558891296387
+    ],
+    "torch_linear": [
+      491.4383252461751,
+      493.0135091145833
+    ]
+  },
+  "accuracy_cases": 48,
+  "accuracy_max_nrmse_vs_cpu_fp32": 4.017459650640376e-05,
+  "accuracy_all_top1_match": true,
+  "profile_path": "/data1/t00995472/spark-bf16-opt/lm_head/round2/profile/suzhou-blue-122_2899301_20261016035917509_ascend_pt/ASCEND_PROFILER_OUTPUT/kernel_details.csv",
+  "profile_reconciled": true,
+  "profile": {
+    "lm_head_m4": {
+      "count": 3,
+      "mean_duration_us": 491.514,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 490.8366666666667,
+      "mean_mte2_time_us": 456.9123333333333,
+      "mean_mte2_ratio": 0.9306666666666668,
+      "mean_compute_ratio": 0.25266666666666665
+    },
+    "lm_head_m8": {
+      "count": 3,
+      "mean_duration_us": 497.8673333333333,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 497.6066666666667,
+      "mean_mte2_time_us": 483.262,
+      "mean_mte2_ratio": 0.9713333333333333,
+      "mean_compute_ratio": 0.22933333333333333
+    },
+    "lm_head_m16": {
+      "count": 3,
+      "mean_duration_us": 493.2323333333333,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 492.9633333333333,
+      "mean_mte2_time_us": 477.9596666666667,
+      "mean_mte2_ratio": 0.9696666666666667,
+      "mean_compute_ratio": 0.553
+    },
+    "lm_head_m8cache": {
+      "count": 3,
+      "mean_duration_us": 491.7726666666667,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 491.52,
+      "mean_mte2_time_us": 474.7676666666667,
+      "mean_mte2_ratio": 0.9656666666666667,
+      "mean_compute_ratio": 0.2316666666666667
+    },
+    "lm_head_m8c28": {
+      "count": 3,
+      "mean_duration_us": 485.1963333333333,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 484.91333333333336,
+      "mean_mte2_time_us": 463.6286666666667,
+      "mean_mte2_ratio": 0.956,
+      "mean_compute_ratio": 0.4713333333333333
+    },
+    "lm_head_m8c112": {
+      "count": 3,
+      "mean_duration_us": 481.17333333333335,
+      "core_pipe": "aiv",
+      "mean_core_time_us": 480.92,
+      "mean_mte2_time_us": 465.17199999999997,
+      "mean_mte2_ratio": 0.9666666666666667,
+      "mean_compute_ratio": 0.23800000000000002
+    },
+    "MatMulV3": {
+      "count": 3,
+      "mean_duration_us": 491.10900000000004,
+      "core_pipe": "aic",
+      "mean_core_time_us": 490.8466666666667,
+      "mean_mte2_time_us": 489.32033333333334,
+      "mean_mte2_ratio": 0.997,
+      "mean_compute_ratio": 0.12633333333333333
+    }
+  },
+  "streaming_read": [
+    {
+      "cores": 28,
+      "tile_bytes": 16384,
+      "timings_us": [
+        985.95458984375,
+        989.946044921875,
+        991.3336588541666
+      ],
+      "mean_us": 989.0780978732639,
+      "read_bytes": 671088640,
+      "output_bytes": 1310720,
+      "achieved_read_TB_s": 0.6784991412134073
+    },
+    {
+      "cores": 56,
+      "tile_bytes": 16384,
+      "timings_us": [
+        516.5842692057291,
+        517.6814371744791,
+        517.6038411458334
+      ],
+      "mean_us": 517.2898491753472,
+      "read_bytes": 671088640,
+      "output_bytes": 1310720,
+      "achieved_read_TB_s": 1.2973164678754778
+    },
+    {
+      "cores": 112,
+      "tile_bytes": 16384,
+      "timings_us": [
+        514.7129313151041,
+        514.6106770833334,
+        514.7183430989584
+      ],
+      "mean_us": 514.680650499132,
+      "read_bytes": 671088640,
+      "output_bytes": 1310720,
+      "achieved_read_TB_s": 1.3038932770236946
+    },
+    {
+      "cores": 28,
+      "tile_bytes": 32768,
+      "timings_us": [
+        651.3885498046875,
+        651.2721761067709,
+        651.3478190104166
+      ],
+      "mean_us": 651.336181640625,
+      "read_bytes": 671088640,
+      "output_bytes": 655360,
+      "achieved_read_TB_s": 1.0303260572898336
+    },
+    {
+      "cores": 56,
+      "tile_bytes": 32768,
+      "timings_us": [
+        497.7362874348958,
+        497.6936848958333,
+        497.7169189453125
+      ],
+      "mean_us": 497.71563042534723,
+      "read_bytes": 671088640,
+      "output_bytes": 655360,
+      "achieved_read_TB_s": 1.3483374822415932
+    },
+    {
+      "cores": 112,
+      "tile_bytes": 32768,
+      "timings_us": [
+        495.7635498046875,
+        495.6816813151042,
+        495.7534993489583
+      ],
+      "mean_us": 495.73291015625,
+      "read_bytes": 671088640,
+      "output_bytes": 655360,
+      "achieved_read_TB_s": 1.3537302572638956
+    },
+    {
+      "cores": 28,
+      "tile_bytes": 65536,
+      "timings_us": [
+        547.6348470052084,
+        547.6212158203125,
+        547.5850830078125
+      ],
+      "mean_us": 547.6137152777778,
+      "read_bytes": 671088640,
+      "output_bytes": 327680,
+      "achieved_read_TB_s": 1.2254781450453436
+    },
+    {
+      "cores": 56,
+      "tile_bytes": 65536,
+      "timings_us": [
+        489.37841796875,
+        489.342041015625,
+        489.4110107421875
+      ],
+      "mean_us": 489.3771565755208,
+      "read_bytes": 671088640,
+      "output_bytes": 327680,
+      "achieved_read_TB_s": 1.3713117397960062
+    },
+    {
+      "cores": 112,
+      "tile_bytes": 65536,
+      "timings_us": [
+        491.2913411458333,
+        491.3426106770833,
+        491.2906901041667
+      ],
+      "mean_us": 491.30821397569446,
+      "read_bytes": 671088640,
+      "output_bytes": 327680,
+      "achieved_read_TB_s": 1.365921881438765
+    },
+    {
+      "cores": 28,
+      "tile_bytes": 131072,
+      "timings_us": [
+        502.6289876302083,
+        502.5762532552083,
+        502.6228841145833
+      ],
+      "mean_us": 502.609375,
+      "read_bytes": 671088640,
+      "output_bytes": 163840,
+      "achieved_read_TB_s": 1.335209157210806
+    },
+    {
+      "cores": 56,
+      "tile_bytes": 131072,
+      "timings_us": [
+        488.8447672526042,
+        488.9574788411458,
+        488.9084879557292
+      ],
+      "mean_us": 488.90357801649304,
+      "read_bytes": 671088640,
+      "output_bytes": 163840,
+      "achieved_read_TB_s": 1.3726400668259398
+    },
+    {
+      "cores": 112,
+      "tile_bytes": 131072,
+      "timings_us": [
+        488.80859375,
+        488.8091634114583,
+        488.7936604817708
+      ],
+      "mean_us": 488.80380588107636,
+      "read_bytes": 671088640,
+      "output_bytes": 163840,
+      "achieved_read_TB_s": 1.3729202431031657
+    }
+  ],
+  "read_active_health_samples": 62,
+  "read_health_failed_samples": 0,
+  "read_active_frequency_mhz": [
+    1650.0
+  ],
+  "read_active_temperature_range_c": [
+    55.0,
+    73.0
+  ],
+  "source_sha256": {
+    "gemv_vf.h": "b774a30758f3bdd436c5f33f185549cd2e7219d915ab45b32f6a1abece6db66f",
+    "bench_read.py": "f2e38279a00f7bcbb7b71d0d2ba0f0b2539ba816038caa521bc881b42921354c",
+    "build_host.c": "86004d65c4f387c95467c6cee92bc1f1f8cb04d6650be09fbd1e359834a56766",
+    "bench.py": "a65659c1671e8dd4843c4d7b5ff99e3ae251898b1ef48675450c3a15a1fb42f8",
+    "build.sh": "0109b1b2e0f5719c335715e3c807c5b743c71c336ff5a9016ff50e0d85c083c3",
+    "README.md": "1524e918b94f43896f1314b5aab8fb6cc7fa299a2d3916f6332e0e2ebe581d66",
+    "lm_head.asc": "128315f350456acdcbfadf1715ec87ca3630bba04bd5649d626327f02b16770e",
+    "stream_read.asc": "0dcb4168944175a8fc9b0b69e987c37f91f5bd9f50c5f1abb065db6f3db8b8dc",
+    "analyze.py": "769d599348b26ff19ae8a26f19e812e822a9bdbdd5c781140831ecd44faa2c71",
+    "bench_sustained.py": "f374f532c2f317fc6f46e67777b6802734848ba820fc53e611f6d9f575ef38f5"
+  },
+  "limitations": [
+    "Standalone GEMV timings did not collect loaded-frequency calibration; a few-percent difference is not an established improvement.",
+    "Pipe utilization ratios overlap; they are not additive and do not establish a global-memory bandwidth limit.",
+    "Streaming-read rate is specific to this path, buffer size, rotating allocations, and device; it is not hardware peak or proof of optimality.",
+    "Read validation samples 32 bytes per full DMA tile. Device IR retains the full-tile DMA request; unsampled bytes are not directly validated.",
+    "Read telemetry records loaded frequency, not a complete hardware-calibration attestation. Concurrent peers on other cards prevent host-wide exclusivity claims.",
+    "No full-model LM-head candidate was integrated because the experiments do not establish a repeatable material benefit."
+  ],
+  "sustained": {
+    "physical_npu": 6,
+    "dtype": "BF16",
+    "shape": [
+      131072,
+      2560
+    ],
+    "rotating_allocations": 3,
+    "accuracy": {
+      "m8c28": {
+        "nrmse_vs_torch": 1.1921938494197093e-05,
+        "top1": 46722
+      },
+      "m8c112": {
+        "nrmse_vs_torch": 1.1921938494197093e-05,
+        "top1": 46722
+      }
+    },
+    "means_us": {
+      "m8c28": 492.4757792154948,
+      "m8c112": 489.21570841471356,
+      "torch_linear": 490.52867635091144
+    },
+    "timings": [
+      {
+        "round": 0,
+        "method": "m8c28",
+        "iterations": 3000,
+        "start": 1792131225.3227036,
+        "end": 1792131226.800249,
+        "mean_us": 492.5255533854167,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 0,
+        "method": "m8c112",
+        "iterations": 3000,
+        "start": 1792131226.8010895,
+        "end": 1792131228.2687595,
+        "mean_us": 489.1881510416667,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 0,
+        "method": "torch_linear",
+        "iterations": 3000,
+        "start": 1792131228.2692432,
+        "end": 1792131229.741167,
+        "mean_us": 490.6042073567708,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 1,
+        "method": "torch_linear",
+        "iterations": 3000,
+        "start": 1792131229.7416744,
+        "end": 1792131231.2132425,
+        "mean_us": 490.4906819661458,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 1,
+        "method": "m8c112",
+        "iterations": 3000,
+        "start": 1792131231.2136793,
+        "end": 1792131232.681406,
+        "mean_us": 489.202880859375,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 1,
+        "method": "m8c28",
+        "iterations": 3000,
+        "start": 1792131232.6818454,
+        "end": 1792131234.1592004,
+        "mean_us": 492.4112548828125,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 2,
+        "method": "m8c28",
+        "iterations": 3000,
+        "start": 1792131234.1596792,
+        "end": 1792131235.637255,
+        "mean_us": 492.4852294921875,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 2,
+        "method": "m8c112",
+        "iterations": 3000,
+        "start": 1792131235.6377215,
+        "end": 1792131237.1053705,
+        "mean_us": 489.1849365234375,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 2,
+        "method": "torch_linear",
+        "iterations": 3000,
+        "start": 1792131237.1058471,
+        "end": 1792131238.577532,
+        "mean_us": 490.5240478515625,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 3,
+        "method": "torch_linear",
+        "iterations": 3000,
+        "start": 1792131238.577904,
+        "end": 1792131240.049506,
+        "mean_us": 490.4957682291667,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 3,
+        "method": "m8c112",
+        "iterations": 3000,
+        "start": 1792131240.0499034,
+        "end": 1792131241.517865,
+        "mean_us": 489.286865234375,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      },
+      {
+        "round": 3,
+        "method": "m8c28",
+        "iterations": 3000,
+        "start": 1792131241.5181317,
+        "end": 1792131242.9956763,
+        "mean_us": 492.4810791015625,
+        "active_frequency_samples_mhz": [
+          1650.0,
+          1650.0
+        ]
+      }
+    ],
+    "limitation": "Observed standalone measurements, not full-model gains or calibrated hardware peak.",
+    "speedups_vs_torch": {
+      "m8c28": 0.9960462972053467,
+      "m8c112": 1.0026838221128518
+    }
+  }
+}

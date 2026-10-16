@@ -108,8 +108,12 @@ def stats(actual, ref):
 
 
 def run(args):
-    if os.environ.get('ASCEND_RT_VISIBLE_DEVICES') in (None, '', '0'):
+    visible=os.environ.get('ASCEND_RT_VISIBLE_DEVICES','').split(',')
+    if len(visible)!=1 or not visible[0].isdigit() or int(visible[0])==0:
         raise RuntimeError('Explicitly expose a checked idle physical NPU other than 0')
+    libpath = Path(args.build)/f'libdecode_layer_{args.variant}.so'
+    if not libpath.is_file():
+        raise FileNotFoundError(f'Build the diagnostic first: {libpath}')
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
     torch.npu.set_device(0)
@@ -177,7 +181,6 @@ def run(args):
     y = torch.full((2560+128,),float('nan'),dtype=BF,device='npu')
     rout = y.clone()
     variant = args.variant
-    libpath = Path(args.build)/f'libdecode_layer_{variant}.so'
     lib = ctypes.CDLL(str(libpath))
     fn = getattr(lib, f'launch_decode_layer_{variant}')
     fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)] + [ctypes.c_void_p]*7 + [ctypes.c_int,ctypes.c_int,ctypes.c_float,ctypes.c_float]
@@ -186,9 +189,14 @@ def run(args):
     torch.npu.synchronize()
     started = time.monotonic()
     print(f'LAUNCH variant={variant} layer={layer} length={args.length} rd={rd}',flush=True)
-    fn(torch.npu.current_stream().npu_stream, ptrs,
-       *[t.data_ptr() for t in caches], ws.data_ptr(),y.data_ptr(),rout.data_ptr(),rd,int(args.slot32),1e-6,1e-6)
-    torch.npu.synchronize()
+    for iteration in range(args.repeat):
+        if iteration:
+            # Check persistent flags and reused allocations across launches.
+            ws.fill_(0xa5);y.fill_(float('nan'));rout.fill_(float('nan'))
+            torch.npu.synchronize()
+        fn(torch.npu.current_stream().npu_stream, ptrs,
+           *[t.data_ptr() for t in caches], ws.data_ptr(),y.data_ptr(),rout.data_ptr(),rd,int(args.slot32),1e-6,1e-6)
+        torch.npu.synchronize()
     elapsed = time.monotonic()-started
     print('LAUNCH_OK',elapsed,flush=True)
     workspace = ws.cpu()
@@ -249,12 +257,12 @@ def run(args):
         stages={k:v for k,v in stages.items() if k in ('q_rope','k_rope','v','gate','cache_k','cache_v','cache_nz_k','cache_nz_v')}
     elif args.stop=='attention':
         stages={k:v for k,v in stages.items() if k in ('q_rope','k_rope','v','gate','cache_k','cache_v','cache_nz_k','cache_nz_v') or k.startswith(('partial_','lse_'))}
-    result = {'variant':variant,'stop':args.stop,'layer':layer,'length':args.length,'slot32':args.slot32,
+    result = {'variant':variant,'stop':args.stop,'layer':layer,'length':args.length,'slot32':args.slot32,'repeat':args.repeat,
               'seed':args.seed,'visible_devices':os.environ['ASCEND_RT_VISIBLE_DEVICES'],
               'device':str(props),'launch_wall_seconds_not_benchmark':elapsed,
               'reference':'CPU FP32 operations with BF16 stage boundaries; real weights, constructed activations/history',
               'screen':{'nrmse_max':.03,'cosine_min':.999,'official_standard':False},
-              'sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [ROOT/f'decode_layer_{variant}.asc',ROOT/'decode_cube_matmul.h',libpath]},
+              'sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [ROOT/'kernels'/('legacy' if variant=='mega' else '')/f'decode_layer_{variant}.asc',ROOT/'kernels/decode_cube_matmul.h',libpath]},
               'stages':stages,'guards':guards,
               'pass':all(s['pass'] for s in stages.values()) and all(guards.values())}
     manifest=Path(args.build)/'execution.json'
@@ -278,8 +286,11 @@ if __name__=='__main__':
     p.add_argument('--seed',type=int,default=20261016)
     p.add_argument('--stop',choices=['full','qkv','attention'],default='full')
     p.add_argument('--debug')
+    p.add_argument('--repeat',type=int,default=1)
     p.add_argument('--output',required=True)
     a=p.parse_args()
     if not 0 <= a.layer < 36 or not 1 <= a.length <= 40960:
         p.error('Supported validation domain: layer 0..35, length 1..40960')
+    if not 1 <= a.repeat <= 10:
+        p.error('--repeat must be 1..10')
     raise SystemExit(run(a))

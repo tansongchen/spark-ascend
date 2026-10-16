@@ -1,8 +1,11 @@
 """验证本机兼容补丁的 MLP 分片加载与 RoPE 数值（使用基准脚本的设备预检查）。"""
 from types import SimpleNamespace
 import faulthandler
+from pathlib import Path
+import sys
 
-from benchmark_spark_vllm import arguments, preflight
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from benchmarks.benchmark_spark_vllm import arguments, preflight
 
 
 def main():

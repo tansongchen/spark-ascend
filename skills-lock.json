@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "skills": {
+    "bisheng": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "9490c109e75d642f67107d800e3552f0ebd973554e2e69fca4eac0c946aeea52"
+    },
+    "cake-evo": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "cd27eee76fffbde403cb250c4177ce21d659912b9769994eb5be57663e7f9151"
+    },
+    "cake3": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "50f10a1be0f41e3cb823c36d76539d34fc0d55a28bed25b93356cc5e2f01fba3"
+    },
+    "cann-bench": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "ef7885a8097b0dc202fff83d888398c1a315017bcd03790f3dd6f245926de883"
+    },
+    "cannsim": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "7753858a27326563d684f380f8a7ac9582b30e4183ade352ad60ed8e0935a4c6"
+    },
+    "contribute": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "cdefd033b5c99dddff83d8a7a725f6596f85d72b99d69156689e8916cda04029"
+    },
+    "evolution-report": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "aaf271127fd1f318531fbe3d3f184d3602f7c81301e07480183d359240c39d35"
+    },
+    "hardware-calibration": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "6ddf0fac27f866c6a04c332d00f0b0c4d397995d931c1c35e84c50e695f0f4c6"
+    },
+    "msprof": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "09981a3aee996095559f323af7d34ac0cfb696fa2cbd76064d26a54fb00dd126"
+    },
+    "mssanitizer": {
+      "source": "../../../data1/t00995472/cake3-bundles/3510",
+      "sourceType": "local",
+      "computedHash": "471769555547cb19510101d4c013506f6e04b61af0ed7be39292c1037ac89296"
+    }
+  }
+}

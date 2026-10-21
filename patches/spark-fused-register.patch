@@ -5,7 +5,7 @@
      _register_config()
      _register_tool_parser()
 -    ModelRegistry.register_model(ARCHITECTURE, MODEL_TARGET)
-+    target = "spark_fused_decode:SparkFusedForCausalLM" if os.environ.get("SPARK_FUSED_DECODE") == "1" or os.environ.get("SPARK_LOGITS_DIR") else MODEL_TARGET
++    target = "utils.spark_fused_decode:SparkFusedForCausalLM" if os.environ.get("SPARK_FUSED_DECODE") == "1" or os.environ.get("SPARK_LOGITS_DIR") else MODEL_TARGET
 +    ModelRegistry.register_model(ARCHITECTURE, target)
      logger.info(
          "vllm-spark2_5-plugin: registered %s -> %s "

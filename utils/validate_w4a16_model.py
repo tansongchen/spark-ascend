@@ -1,5 +1,6 @@
 """Same-engine native/fused W4A16 teacher-forced logits; not a timing run."""
 import argparse
+from collections.abc import Mapping
 import hashlib
 import json
 import os
@@ -12,6 +13,18 @@ sys.path.insert(0, str(ROOT))
 
 
 class ValidationWorker:
+    def spark_readability_mode(self,mode):
+        import torch
+        from utils.spark_w4a16_fused import W4A16FusedState
+        model=self.get_model();state=model.model._spark_fused_state
+        torch.npu.synchronize()
+        if mode not in ('native','fused'):
+            raise ValueError(mode)
+        state.history_ready=False;state.last_length=None
+        state.forward=state.original if mode=='native' else W4A16FusedState.forward.__get__(state)
+        model._logit_dir=None;model._forced=None;model._validation_active=False
+        return {'mode':mode}
+
     def spark_validation_mode(self, mode, directory, forced, debug_step=None, debug_cache_layers=None):
         import torch
         from utils.spark_w4a16_fused import W4A16FusedState
@@ -130,8 +143,10 @@ def main():
     p.add_argument("--debug-cache-layers", type=int, nargs="+", choices=range(36),
                    help="Capture logical KV pages for selected layers at --debug-step")
     p.add_argument("--model", default="/data1/t00995472/models/Spark-X2.5-4B-W4A16-G128")
+    p.add_argument('--readability-only',action='store_true',help='同一引擎原生/融合自由生成三类自然问题；不导出 logits，不作性能计时')
+    p.add_argument('--thinking',action='store_true',help='可读性检查保留模型思考模式，默认关闭以观察完整回答')
     a = p.parse_args()
-    if not 2 <= a.steps <= 128 or min(a.contexts) < 1 or max(a.contexts) + a.steps > 40960:
+    if not 2 <= a.steps <= (512 if a.readability_only else 128) or min(a.contexts) < 1 or max(a.contexts) + a.steps > 40960:
         p.error("Supported contexts+steps<=40960, 2<=steps<=128")
     if a.debug_cache_layers and a.debug_step is None:
         p.error("--debug-cache-layers requires --debug-step")
@@ -161,6 +176,41 @@ def main():
               worker_extension_cls="utils.validate_w4a16_model.ValidationWorker")
     results = []
     try:
+        if a.readability_only:
+            prompts=[
+                '请用三句话解释为什么晴天的天空通常是蓝色的，适合中学生理解。',
+                '请计算17乘23，写出计算过程。然后给出一行Python代码，将列表[3, 1, 2]从小到大排序。',
+                '请给同事写一封约100字的中文邮件，说明模型性能优化已完成初步测试，但仍需核对输出质量，邀请他明天下午一起复核。',
+            ]
+            rows=[]
+            for mode in ('native','fused'):
+                llm.collective_rpc('spark_readability_mode',args=(mode,))
+                for number,prompt in enumerate(prompts):
+                    ids=tokenizer.apply_chat_template([{'role':'user','content':prompt}],tokenize=True,
+                                                      add_generation_prompt=True,enable_thinking=a.thinking)
+                    if isinstance(ids,Mapping):
+                        ids=ids['input_ids']
+                    if len(ids)>max(a.contexts):
+                        raise ValueError('Readability prompt exceeds configured context capacity')
+                    params=SamplingParams(temperature=0,max_tokens=a.steps,ignore_eos=False,detokenize=True)
+                    output=llm.generate([{'prompt_token_ids':ids}],params,use_tqdm=False)[0].outputs[0]
+                    rows.append({'mode':mode,'prompt':prompt,'prompt_tokens':len(ids),
+                                 'token_ids':list(output.token_ids),'text':output.text,
+                                 'finish_reason':output.finish_reason,'stop_reason':output.stop_reason})
+                    print(json.dumps({'mode':mode,'prompt_number':number,'text':output.text},ensure_ascii=False),flush=True)
+            status=llm.collective_rpc('spark_validation_status')
+            # These requests configure no explicit stop strings/tokens. On EOS,
+            # vLLM removes the terminating token from the returned token list,
+            # but sampling that EOS still consumed one decode invocation.
+            expected=sum(max(0,len(r['token_ids'])-1+int(r['finish_reason']=='stop'))
+                         for r in rows if r['mode']=='fused')
+            execution_ok=all(s['ready'] and s['decode_steps']==expected for s in status)
+            report={'scope':'free-generation readability inspection; no forced tokens, logits export or timing claim',
+                    'rows':rows,'fused_status':status,'execution_ok':execution_ok,'expected_decode_steps':expected,
+                    'library':str(a.library),'library_sha256':hashlib.sha256(a.library.read_bytes()).hexdigest(),
+                    'thinking':a.thinking,'human_review_required':True,'quality_benchmark':False}
+            (a.output/'readability.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+            return 0 if execution_ok else 1
         for length in a.contexts:
             directory = a.output / str(length)
             directory.mkdir()

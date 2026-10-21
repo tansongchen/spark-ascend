@@ -30,6 +30,7 @@ def main():
         "utils/spark_fused_decode.py",
         "utils/spark_w4a16_fused.py",
         "utils/spark_w4a16.py",
+        "utils/quantize_spark_w4a16.py",
         "utils/w4a16_packing.py")]
     snapshot = a.directory / "sources"
     for f in files:

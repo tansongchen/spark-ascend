@@ -2,24 +2,25 @@
 
 本仓库面向 Ascend 950PR，为 Spark-X2.5-4B 提供可直接编译的融合 decode 算子、vLLM 接入和统一 benchmark。prefill 沿用原模型路径，decode 每 token 调用 36 个融合层，LM head 与采样仍由 vLLM 执行。
 
-仅保留三个算子版本：
+提供四个算子版本：
 
 | 构建名称 | 源码 | 历史完整模型结果 |
 | --- | --- | --- |
 | `stage_prefetch` | [BF16 原始版](kernels/decode_layer_stage_prefetch.asc) | 约 7.56 ms/token |
 | `lossless_prefetch` | [BF16 无损版](kernels/decode_layer_lossless_prefetch.asc) | 约 6.82 ms/token，权重逐位还原 |
 | `w4a16_v10b` | [W4A16 v10b](kernels/decode_layer_w4a16_v10b.asc) | 约 4.165 ms/token；完整模型 logits 未通过既定门限 |
+| `w4a16_reborn` | [W4A16 新版](kernels/decode_layer_w4a16_reborn.asc) | 约 3.218 ms/token，310.77 token/s；decode head 为 INT4，完整 attention 私有 KV 为 FP8 |
 
-这些数值来自既有 32768 输入 / 4096 输出、单请求实验，并非一次统一交错对照。方案与验收边界分别见 [BF16 无损压缩](docs/LOSSLESS_DECODE.md) 和 [W4A16](docs/W4A16.md)。
+这些数值来自 32768 输入 / 4096 输出、单请求实验，并非一次统一交错对照。方案与验收边界见 [BF16 无损压缩](docs/LOSSLESS_DECODE.md)、[W4A16 v10b](docs/W4A16.md) 和 [新版设计与验证](docs/W4A16_REBORN.md)。新版以生成可读为目标，新增了 LM head 与 KV 量化误差，不代表通过旧版严格 logits 门限。
 
 ## 目录
 
-- `kernels/`：3 个静态 `.asc` 和 5 个依赖头文件，构建与运行均不生成 kernel 源码。
+- `kernels/`：4 个静态 `.asc` 和 10 个依赖头文件，构建与运行均不生成 kernel 源码。
 - `utils/`：模型接入、权重打包、构建、验证和分析工具。
 - `benchmark.py`：完整模型 TTFT/TPOT benchmark，直接接收模型参数。
 - `patches/`：Spark 插件与 vLLM Ascend 的本机兼容补丁。
 - `pyproject.toml`：本地 W4A16 插件安装配置。
-- `docs/`：两篇优化思路文档；[AGENTS.md](AGENTS.md) 保存工作与维护约定。
+- `docs/`：三篇优化思路文档；[AGENTS.md](AGENTS.md) 保存工作与维护约定。
 
 ## 环境与安装
 
@@ -46,7 +47,7 @@ npu-smi info
 
 仓库本身是 editable 安装源，移动后需要重新安装。benchmark 自动设置模型开关；未启用融合或量化时保留原模型路径。
 
-## 构建三个版本
+## 构建算子
 
 为每个版本使用新的空目录。以下路径用于示例，重跑时换一个目录：
 
@@ -58,9 +59,10 @@ mkdir -p "$SPARK_RESULTS"
 bash utils/build.sh "$SPARK_BUILD/stage" --kernel stage_prefetch
 bash utils/build.sh "$SPARK_BUILD/lossless" --kernel lossless_prefetch
 bash utils/build.sh "$SPARK_BUILD/w4a16" --kernel w4a16_v10b
+bash utils/build.sh "$SPARK_BUILD/reborn" --kernel w4a16_reborn
 ```
 
-BF16 两版生成 `libdecode_layer_stage_prefetch.so`，W4A16 生成 `libdecode_layer_w4a16.so`。三个源码分别编译，不能合并链接；部署时必须一起复制共享库和同目录的 `execution.json`，模型适配器据此选择权重布局与工作区。
+BF16 两版生成 `libdecode_layer_stage_prefetch.so`，W4A16 两版生成 `libdecode_layer_w4a16.so`。四个源码分别编译，不能合并链接；部署时必须一起复制共享库和同目录的 `execution.json`，模型适配器据此选择权重布局、KV 编码、head 路径与工作区。
 
 ## 运行 benchmark
 
@@ -74,7 +76,7 @@ python -B utils/benchmark_kernel.py --kernel lossless_prefetch \
 
 测其他版本时同时修改 `--kernel`、`--build` 和输出路径。单层计时用于筛选，不能替代完整模型 TPOT。
 
-以下三个完整模型命令默认均为输入 32768 token、输出 4096 token、完整预热一次后测三次；短请求检查可追加 `--input-tokens 128 --output-tokens 8 --runs 1`。
+以下完整模型命令默认均为输入 32768 token、输出 4096 token、完整预热一次后测三次；短请求检查可追加 `--input-tokens 128 --output-tokens 8 --runs 1`。
 
 ```bash
 # BF16 原始融合版
@@ -92,6 +94,12 @@ python -B benchmark.py --npu 2 --enforce-eager --w4a16 --fused-decode \
   --model /data1/t00995472/models/Spark-X2.5-4B-W4A16-G128 \
   --fused-library "$SPARK_BUILD/w4a16/libdecode_layer_w4a16.so" \
   --result "$SPARK_RESULTS/w4a16.json"
+
+# W4A16 新版：另加 decode head INT4 与完整 attention 私有 KV FP8
+python -B benchmark.py --npu 4 --enforce-eager --w4a16 --fused-decode \
+  --model /data1/t00995472/models/Spark-X2.5-4B-W4A16-G128 \
+  --fused-library "$SPARK_BUILD/reborn/libdecode_layer_w4a16.so" \
+  --result "$SPARK_RESULTS/reborn.json"
 ```
 
 BF16 默认模型为 `/data1/t00995472/models/Spark-X2.5-4B`，可用 `--model` 修改。W4A16 权重导出方法见 [量化方案](docs/W4A16.md)。结果路径应使用新名称，普通模型 benchmark 会覆盖同名结果。
@@ -104,6 +112,7 @@ BF16 默认模型为 `/data1/t00995472/models/Spark-X2.5-4B`，可用 `--model` 
 | `utils/run_model_recorded.py` | 包装完整模型 benchmark，额外记录源码身份和设备采样 |
 | `utils/benchmark_paired_model.py` | 同一引擎内 BF16 原始/无损库交错 AB/BA 对照 |
 | `utils/run_spark_fused_benchmarks.py` | 原模型、融合及图执行等模式的顺序对照 |
+| `utils/validate_w4a16_model.py --readability-only` | 原生/新融合路径的自然问题自由生成检查 |
 
 例如 `python -B utils/run_model_recorded.py --directory /data1/t00995472/spark-benchmark/recorded-example -- --npu 2 --enforce-eager`；`--` 后直接传完整模型参数。上述脚本及 `benchmark.py` 均支持 `--help`。TTFT 为提交请求到首 token 的时间，TPOT 为 `(末 token 时间 − 首 token 时间) / (输出 token 数 − 1)`。计时包含引擎调度与进程通信，排除加载、分词、预热及 HTTP；profiler、logits 导出运行不可用作性能结果。输入为重复中文文本，不代表全部业务负载。
 

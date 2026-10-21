@@ -162,7 +162,16 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
             inputs[4]=pack_weight(inputs[4],2560,8)
             inputs[5]=pack_weight(inputs[5],10240,4)
     dev = [t.npu() for t in inputs]
+    cache8 = manifest_data.get('kv_encoding') == 'fp8_e4m3fn_full_attention' and rd == 64
     caches = [t.npu() for t in (kc,vc,nk,nv)]
+    if cache8:
+        codec_lib=ctypes.CDLL(str(libpath));codec=codec_lib.launch_reborn_kv8_codec
+        codec.argtypes=[ctypes.c_void_p]*3+[ctypes.c_int]*2;codec.restype=None
+        for j in (2,3):
+            src=caches[j];dst=torch.empty_like(src,dtype=torch.uint8)
+            torch.npu.synchronize()
+            codec(torch.npu.current_stream().npu_stream,src.data_ptr(),dst.data_ptr(),src.numel(),0)
+            torch.npu.synchronize();caches[j]=dst
     workspace_bytes=manifest_data.get('workspace_bytes',128*1024)
     ws = torch.full((workspace_bytes+4096,), 0xa5, dtype=torch.uint8,device='npu')
     y = torch.full((2560+128,),float('nan'),dtype=BF,device='npu')
@@ -197,7 +206,11 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
                     'rawqkv':rawqkv,'workspace':workspace},args.debug)
     merged,oproj,mid,raw,resmid = [view(o,n) for o,n in zip(offsets,(4096,2560,10240,2560,2560))]
     begin = max(0,pos-512) if rd==256 else 0
-    att,_ = attention(q,khist,vhist,begin,pos+1)
+    katt,vatt=khist,vhist
+    if cache8:
+        katt=khist.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
+        vatt=vhist.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
+    att,_ = attention(q,katt,vatt,begin,pos+1)
     gated = bf(att * bf(torch.sigmoid(gate.float()))[:,None]).flatten()
     op = linear(gated,w['self_attn.out_proj.weight'])
     rmid = bf(op.float()+residual.float())
@@ -213,8 +226,12 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
     stages['cache_k'] = stats(caches[0].reshape(-1,4,256)[slot].cpu(),k)
     stages['cache_v'] = stats(caches[1].reshape(-1,4,256)[slot].cpu(),v)
     if rd==64:
-        stages['cache_nz_k'] = stats(caches[2].reshape(pages,4,16,128,16)[slot//128,:,:,slot%128,:].reshape(4,256).cpu(),k)
-        stages['cache_nz_v'] = stats(caches[3].reshape(pages,4,16,128,16)[slot//128,:,:,slot%128,:].reshape(4,256).cpu(),v)
+        for j,key,reference in [(2,'cache_nz_k',k),(3,'cache_nz_v',v)]:
+            actual=caches[j].reshape(pages,4,16,128,16)[slot//128,:,:,slot%128,:].reshape(4,256).cpu()
+            if cache8:
+                actual=actual.view(torch.float8_e4m3fn).bfloat16()
+                reference=reference.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
+            stages[key]=stats(actual,reference)
     partial = (view(131072,8*16*256,torch.float32) if manifest_data.get('attention_partials')=='float32'
                else view(12544,8*16*256)).reshape(8,16,256)
     if variant in ('stage_prefetch','w4a16'):
@@ -228,7 +245,7 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
         hi=min(base+(part+1)*width,pos+1)
         if hi<=lo:
             continue
-        pa,pl = attention(q,khist,vhist,lo,hi)
+        pa,pl = attention(q,katt,vatt,lo,hi)
         stages[f'partial_{part}'] = stats(partial[part],pa)
         stages[f'lse_{part}'] = stats(lse[part],pl)
     # Local references distinguish defects here from upstream error propagation.
@@ -256,6 +273,9 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
               'sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [source_path,ROOT/'kernels/decode_cube_matmul.h',libpath]},
               'stages':stages,'guards':guards,
               'pass':all(s['pass'] for s in stages.values()) and all(guards.values())}
+    if cache8:
+        result['reference'] += '; full attention consumes CPU FP8-rounded K/V, then BF16 compute'
+        result['kv_quantization']={'k':stats(katt,khist),'v':stats(vatt,vhist)}
     manifest=Path(args.build)/'execution.json'
     result['execution']=json.loads(manifest.read_text()) if manifest.exists() else {'execution':'supplied_kernel' if args.stop=='full' else 'early_return_diagnostic'}
     generated=Path(args.build)/f'decode_layer_{variant}.asc'

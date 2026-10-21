@@ -6,6 +6,7 @@ This is a local format, not an AWQ, GPTQ or msModelSlim-exported checkpoint.
 """
 import torch
 import torch_npu
+import types
 from vllm.config import get_current_vllm_config
 from vllm_ascend.quantization.methods.base import AscendLinearScheme
 from vllm_ascend.quantization.methods.registry import register_scheme
@@ -77,11 +78,22 @@ class SparkW4A16ForCausalLM(SparkFusedForCausalLM):
         # The source checkpoint already stores Q/K/V together.
         packed_modules_model_mapping["spark2_5"] = {"gate_up_proj": ["gate_proj", "up_proj"]}
         super().__init__(vllm_config=vllm_config, prefix=prefix)
+        original_get_logits = self.logits_processor._get_logits
+        def get_logits(processor,hidden,lm_head,bias):
+            state = getattr(self.model,'_spark_fused_state',None)
+            if (state is not None and state.ready and state.history_ready
+                    and getattr(state,'quantized_head',False) and hidden.shape == (1,2560)):
+                if bias is not None:
+                    raise ValueError('Reborn head does not support an embedding bias')
+                return state.head_logits(hidden)[...,:processor.org_vocab_size]
+            return original_get_logits(hidden,lm_head,bias)
+        self.logits_processor._get_logits = types.MethodType(get_logits,self.logits_processor)
 
 
 class W4A16WorkerExtension(SparkFusedWorkerExtension):
     def spark_quant_audit(self):
         model = self.model_runner.model
+        state = getattr(model.model,'_spark_fused_state',None)
         rows = []
         for name, layer in model.named_modules():
             scheme = getattr(getattr(layer, "quant_method", None), "quant_method", None)
@@ -100,4 +112,8 @@ class W4A16WorkerExtension(SparkFusedWorkerExtension):
             "parameter_bytes": sum(p.numel() * p.element_size() for p in model.parameters()),
             "embedding_dtype": str(model.model.embedding.weight.dtype),
             "tied_lm_head": model.lm_head is model.model.embedding,
+            "decode_head": {**getattr(getattr(model.model,'_spark_fused_state',None),'head_audit',{'enabled':False}),
+                            'calls':getattr(getattr(model.model,'_spark_fused_state',None),'head_calls',0)},
+            "private_full_kv_dtypes": sorted({str(e['caches'][2].dtype) for e in state.entries if e['rd']==64}) if state and state.ready else [],
+            "native_kv_dtypes": sorted({str(e['caches'][0].dtype) for e in state.entries}) if state and state.ready else [],
         }

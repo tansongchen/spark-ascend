@@ -4,6 +4,26 @@ import torch
 FORMAT = "spark_w4a16_tile_g128_v1"
 LUT_FORMAT = "spark_w4a16_tile_g128_lut_v2"
 FLOAT_LUT_FORMAT = "spark_w4a16_tile_g128_float_lut_v5"
+OUTER_FORMAT = "spark_w4a16_outer128_g128_v1"
+
+
+def pack_outer(q, scales):
+    """128 output lanes, original G128 scale, contiguous per-K-split DMA."""
+    n, k = q.shape
+    groups = 8 if k == 4096 else 10
+    if (q.dtype != torch.int8 or scales.dtype != torch.bfloat16 or k not in (2560,4096,10240)
+            or n % 128 or k % (groups*128) or scales.shape != (n,k//128)):
+        raise ValueError('Outer GEMV requires N%128=0 and a supported K')
+    if int(q.min()) < -8 or int(q.max()) > 7 or not torch.isfinite(scales).all():
+        raise ValueError('Invalid signed INT4 or scale')
+    splits = k//(groups*128)
+    rows = (q.reshape(n//128,128,splits,groups,128)
+            .permute(0,2,3,4,1).contiguous().int() & 15)
+    packed = (rows[...,:64] | (rows[...,64:] << 4)).to(torch.uint8)
+    packed = packed.flatten(2)
+    scale = scales.reshape(n//128,128,splits,groups).permute(0,2,3,1)
+    scale = torch.stack((scale[...,:64],scale[...,64:]),-1).flatten(-2)
+    return torch.cat((packed,scale.contiguous().view(torch.uint8).flatten(2)),2).flatten()
 
 
 def unpack_checkpoint(words, scales, runtime=False):

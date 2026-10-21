@@ -237,6 +237,11 @@ async def benchmark(a):
                     for layer in layers
                 ):
                     raise RuntimeError('W4A16 运行时权重/激活/调用次数校验失败')
+                head=worker.get('decode_head',{})
+                if head.get('enabled'):
+                    expected_head_calls=a.warmup*(a.output_tokens-1)+sum(row['output_tokens']-1 for row in rows)
+                    if not a.fused_decode or head['calls']!=expected_head_calls:
+                        raise RuntimeError('W4A16 decode head 调用次数校验失败')
             if not audit:
                 raise RuntimeError('没有获取到 W4A16 worker 审计')
             result['w4a16_worker_audit'] = audit

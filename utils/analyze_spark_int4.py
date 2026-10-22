@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit saved W4A16 timing and device samples without executing the model."""
+"""Audit saved official INT4/INT8 timing and device samples without executing the model."""
 import argparse
 from collections import Counter
 import hashlib
@@ -13,7 +13,7 @@ def analyze(directory):
     execution = json.loads((directory / "execution.json").read_text())
     settings = result["settings"]
     assert execution["returncode"] == 0
-    assert settings["w4a16"] and settings["enforce_eager"]
+    assert settings["int4"] and settings["enforce_eager"]
     assert not result["profiled"] and not result["validation_overhead"]
     assert settings["warmup"] == 1 and settings["runs"] == 3
     assert (settings["input_tokens"], settings["output_tokens"]) == (32768, 4096)
@@ -64,7 +64,7 @@ def analyze(directory):
         "summary": result["summary"],
         "all_three_outputs_equal": len({r["token_ids_sha256"] for r in result["runs"]}) == 1,
         "failed_health_samples": len(samples) - len(valid_samples),
-        "runtime_quantized_layers": len(result["w4a16_worker_audit"][0]["quantized_linear_layers"]),
+        "runtime_quantized_layers": len(result["int4_worker_audit"][0]["quantized_linear_layers"]),
         "mean_decode_tokens_per_second": 1000 / result["summary"]["tpot_ms"]["mean"],
         "caveat": "Sparse frequency samples do not prove constant frequency. TPOT uses first/last client receipt; later merged updates cannot measure individual inter-token latency. No profiler or logits export is enabled.",
     }

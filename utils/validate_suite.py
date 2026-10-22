@@ -8,6 +8,7 @@ import time
 
 p=argparse.ArgumentParser()
 p.add_argument('--output',default='/data1/t00995472/spark-kernel-validation/suite')
+p.add_argument('--model',required=True,help='显式 BF16 checkpoint')
 p.add_argument('--build',default='/data1/t00995472/spark-kernel-validation/build')
 a=p.parse_args();out=Path(a.output);out.mkdir(parents=True,exist_ok=True)
 cases=[(0,n) for n in [1,127,128,129,512,513,514,32768]]
@@ -17,7 +18,7 @@ for i,(layer,length) in enumerate(cases):
     label=f'l{layer}-n{length}'
     target=out/f'{label}.json'
     cmd=[sys.executable,str(Path(__file__).with_name('validate_kernel.py')),'--build',a.build,
-         '--layer',str(layer),'--length',str(length),'--output',str(target)]
+         '--model',a.model,'--layer',str(layer),'--length',str(length),'--output',str(target)]
     if i%2:
         cmd+=['--slot32']
     started=time.monotonic()

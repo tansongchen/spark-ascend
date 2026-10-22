@@ -21,7 +21,7 @@ from safetensors import safe_open
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from utils.packing import make_luts, pack_qkv, tile_weights
-MODEL = Path('/data1/t00995472/models/Spark-X2.5-4B')
+MODEL = None
 BF = torch.bfloat16
 
 
@@ -39,6 +39,10 @@ def norm(x, gamma):
 
 
 def load_weights(layer):
+    if MODEL is None:
+        raise ValueError('必须用 --model 指定 BF16 checkpoint')
+    if json.loads((MODEL / 'config.json').read_text()).get('quantization_config'):
+        raise ValueError('BF16 kernel 验证不能使用量化 checkpoint')
     index = json.loads((MODEL / 'model.safetensors.index.json').read_text())['weight_map']
     prefix = f'model.layers.{layer}.'
     keys = [k for k in index if k.startswith(prefix)]
@@ -162,16 +166,7 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
             inputs[4]=pack_weight(inputs[4],2560,8)
             inputs[5]=pack_weight(inputs[5],10240,4)
     dev = [t.npu() for t in inputs]
-    cache8 = manifest_data.get('kv_encoding') == 'fp8_e4m3fn_full_attention' and rd == 64
     caches = [t.npu() for t in (kc,vc,nk,nv)]
-    if cache8:
-        codec_lib=ctypes.CDLL(str(libpath));codec=codec_lib.launch_reborn_kv8_codec
-        codec.argtypes=[ctypes.c_void_p]*3+[ctypes.c_int]*2;codec.restype=None
-        for j in (2,3):
-            src=caches[j];dst=torch.empty_like(src,dtype=torch.uint8)
-            torch.npu.synchronize()
-            codec(torch.npu.current_stream().npu_stream,src.data_ptr(),dst.data_ptr(),src.numel(),0)
-            torch.npu.synchronize();caches[j]=dst
     workspace_bytes=manifest_data.get('workspace_bytes',128*1024)
     ws = torch.full((workspace_bytes+4096,), 0xa5, dtype=torch.uint8,device='npu')
     y = torch.full((2560+128,),float('nan'),dtype=BF,device='npu')
@@ -199,7 +194,7 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
     def view(off,n,dtype=BF):
         width = torch.empty((),dtype=dtype).element_size()
         return workspace[off:off+n*width].view(dtype).clone()
-    offsets = (80128,88320,93440,113920,119040) if variant in ('stage_prefetch','w4a16') else (78592,86784,91904,112384,117504)
+    offsets = (80128,88320,93440,113920,119040) if variant == 'stage_prefetch' else (78592,86784,91904,112384,117504)
     aq,ak,av,ag = view(0,4096).reshape(16,256),view(8192,1024).reshape(4,256),view(10240,1024).reshape(4,256),view(12288,16)
     if args.debug:
         torch.save({'q':aq,'k':ak,'v':av,'gate':ag,'expected_q':q,'expected_k':k,'expected_v':v,
@@ -207,9 +202,6 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
     merged,oproj,mid,raw,resmid = [view(o,n) for o,n in zip(offsets,(4096,2560,10240,2560,2560))]
     begin = max(0,pos-512) if rd==256 else 0
     katt,vatt=khist,vhist
-    if cache8:
-        katt=khist.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
-        vatt=vhist.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
     att,_ = attention(q,katt,vatt,begin,pos+1)
     gated = bf(att * bf(torch.sigmoid(gate.float()))[:,None]).flatten()
     op = linear(gated,w['self_attn.out_proj.weight'])
@@ -228,13 +220,10 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
     if rd==64:
         for j,key,reference in [(2,'cache_nz_k',k),(3,'cache_nz_v',v)]:
             actual=caches[j].reshape(pages,4,16,128,16)[slot//128,:,:,slot%128,:].reshape(4,256).cpu()
-            if cache8:
-                actual=actual.view(torch.float8_e4m3fn).bfloat16()
-                reference=reference.float().clamp(-448,448).to(torch.float8_e4m3fn).bfloat16()
             stages[key]=stats(actual,reference)
     partial = (view(131072,8*16*256,torch.float32) if manifest_data.get('attention_partials')=='float32'
                else view(12544,8*16*256)).reshape(8,16,256)
-    if variant in ('stage_prefetch','w4a16'):
+    if variant == 'stage_prefetch':
         lse = view(78080,512,torch.float32).reshape(8,8,8)[...,:2].reshape(8,16)
     else:
         lse = view(78080,128,torch.float32).reshape(8,16)
@@ -273,9 +262,6 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
               'sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [source_path,ROOT/'kernels/decode_cube_matmul.h',libpath]},
               'stages':stages,'guards':guards,
               'pass':all(s['pass'] for s in stages.values()) and all(guards.values())}
-    if cache8:
-        result['reference'] += '; full attention consumes CPU FP8-rounded K/V, then BF16 compute'
-        result['kv_quantization']={'k':stats(katt,khist),'v':stats(vatt,vhist)}
     manifest=Path(args.build)/'execution.json'
     result['execution']=json.loads(manifest.read_text()) if manifest.exists() else {'execution':'supplied_kernel' if args.stop=='full' else 'early_return_diagnostic'}
     generated=Path(args.build)/f'decode_layer_{variant}.asc'
@@ -297,6 +283,7 @@ def run(args, *, weights_loader=None, input_packer=None, after_validation=None):
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--variant',choices=['stage_prefetch'],default='stage_prefetch')
+    p.add_argument('--model', type=Path, required=True, help='显式 BF16 checkpoint')
     p.add_argument('--build',default='/data1/t00995472/spark-kernel-validation/build')
     p.add_argument('--layer',type=int,default=0)
     p.add_argument('--length',type=int,default=128)
@@ -307,6 +294,8 @@ def main(argv=None):
     p.add_argument('--repeat',type=int,default=1)
     p.add_argument('--output',required=True)
     a=p.parse_args(argv)
+    global MODEL
+    MODEL = a.model
     if not 0 <= a.layer < 36 or not 1 <= a.length <= 40960:
         p.error('Supported validation domain: layer 0..35, length 1..40960')
     if not 1 <= a.repeat <= 10:

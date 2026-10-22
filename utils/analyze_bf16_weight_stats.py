@@ -7,7 +7,7 @@ from safetensors import safe_open
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--model', type=Path, default=Path('/data1/t00995472/models/Spark-X2.5-4B'))
+    p.add_argument('--model', type=Path, required=True,help='显式 BF16 checkpoint；不支持官方混合 INT4/INT8')
     p.add_argument('--layers', type=int, nargs='+', choices=range(36), default=[0, 3, 17, 35])
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()

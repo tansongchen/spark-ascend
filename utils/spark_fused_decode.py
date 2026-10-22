@@ -293,6 +293,8 @@ class SparkFusedForCausalLM(Spark2_5ForCausalLM):
                         or vllm_config.speculative_config is not None):
             raise ValueError('Fused adapter requires eager, max_num_seqs=1, max_model_len<=40960, no prefix cache/speculation')
         config=vllm_config.model_config.hf_config
+        if enabled and getattr(config, 'quantization_config', None):
+            raise ValueError('BF16 融合算子不能读取量化 checkpoint')
         if enabled and (config.sliding_window!=512 or config.rms_norm_eps!=1e-6):
             raise ValueError('Kernel is specialized for sliding_window=512, rms_norm_eps=1e-6')
         state=self.fused_state_class(self.model) if enabled else None

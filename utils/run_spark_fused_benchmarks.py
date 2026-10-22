@@ -10,6 +10,7 @@ import time
 p=argparse.ArgumentParser()
 p.add_argument('--directory',type=Path,default=Path('/data1/t00995472/spark-fused-benchmark/performance'))
 p.add_argument('--npu',type=int,default=2)
+p.add_argument('--model',required=True,help='显式 BF16 checkpoint')
 p.add_argument('--fused-graph-comparison',action='store_true',help='比较融合 eager 与融合内部图重放')
 p.add_argument('--candidate-library',type=Path,help='比较原融合 eager 与兼容的 BF16 候选库')
 p.add_argument('--input-tokens',type=int,default=32768)
@@ -34,7 +35,7 @@ if a.candidate_library:
 summary=[]
 for name,flags in modes:
     cmd=[sys.executable,'-B',str(Path(__file__).resolve().parents[1]/'benchmark.py'),'--npu',str(a.npu),
-         '--input-tokens',str(a.input_tokens),'--output-tokens',str(a.output_tokens),
+         '--model',a.model,'--input-tokens',str(a.input_tokens),'--output-tokens',str(a.output_tokens),
          '--result',str(root/f'{name}.json'),*flags]
     print('START',name,flush=True)
     started=time.time()

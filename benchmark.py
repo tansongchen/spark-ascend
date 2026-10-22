@@ -13,6 +13,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+from utils.model_config import DEFAULT_MODEL, is_official_int4, validate_config
 
 if os.environ.get('SPARK_BENCH_DEBUG') == '1':
     import faulthandler
@@ -21,7 +22,7 @@ if os.environ.get('SPARK_BENCH_DEBUG') == '1':
 
 def arguments():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--model', default='/data1/t00995472/models/Spark-X2.5-4B')
+    p.add_argument('--model', default=str(DEFAULT_MODEL))
     p.add_argument('--npu', type=int, default=2)
     p.add_argument('--input-tokens', type=int, default=32768)
     p.add_argument('--output-tokens', type=int, default=4096)
@@ -30,8 +31,7 @@ def arguments():
     p.add_argument('--gpu-memory-utilization', type=float, default=0.7)
     p.add_argument('--max-num-batched-tokens', type=int, default=32768)
     p.add_argument('--enforce-eager', action='store_true')
-    p.add_argument('--w4a16', action='store_true', help='启用本地 Spark W4A16 插件；要求量化模型路径与 --enforce-eager')
-    p.add_argument('--fused-decode',action='store_true',help='使用本地 stage_prefetch 单 token decode；当前要求 --enforce-eager')
+    p.add_argument('--fused-decode',action='store_true',help='仅供显式 BF16 checkpoint 使用；官方混合 INT4/INT8 不支持旧融合库')
     p.add_argument('--fused-graph',action='store_true',help='捕获融合 decode 的 36 层调用链；要求 --fused-decode --enforce-eager')
     p.add_argument('--fused-library',help='选择与当前模型权重布局兼容的融合候选共享库')
     p.add_argument('--validation-dir',help='导出前 128 步 logits；此模式不得当作性能结果')
@@ -43,10 +43,6 @@ def arguments():
     p.add_argument('--check-only', action='store_true')
     p.add_argument('--result', default='/data1/t00995472/spark-benchmark/result.json')
     a = p.parse_args()
-    if a.w4a16 and not a.enforce_eager:
-        p.error('--w4a16 要求 --enforce-eager')
-    if a.w4a16 and a.fused_decode and not a.fused_library:
-        p.error('W4A16 融合要求显式 --fused-library')
     if a.fused_graph and not a.fused_decode:
         p.error('--fused-graph 要求 --fused-decode')
     if a.fused_library:
@@ -73,9 +69,20 @@ def arguments():
 
 
 def preflight(a):
+    config = json.loads((Path(a.model) / 'config.json').read_text())
+    a.int4 = is_official_int4(config)
+    if a.int4:
+        validate_config(config)
+        if not a.enforce_eager:
+            raise ValueError('官方 INT4 接入当前要求 --enforce-eager')
+        if a.fused_decode:
+            raise ValueError('官方 G32 非对称 INT4/动态 INT8 与旧 BF16/G128 融合库不兼容')
+    elif config.get('quantization_config'):
+        raise ValueError('不再支持本地 G128 量化格式；请使用官方 Spark-X2.6-4B-INT4 checkpoint')
     os.environ.setdefault('VLLM_WORKER_MULTIPROC_METHOD', 'spawn')
     os.environ['HF_HUB_OFFLINE'] = '1'
-    os.environ['SPARK_W4A16'] = '1' if a.w4a16 else '0'
+    os.environ['SPARK_INT4'] = '1' if a.int4 else '0'
+    os.environ.pop('SPARK_W4A16', None)
     os.environ['SPARK_FUSED_DECODE']='1' if a.fused_decode else '0'
     os.environ['SPARK_FUSED_GRAPH']='1' if a.fused_graph else '0'
     os.environ['SPARK_FUSED_CAPACITY']=str(a.input_tokens+a.output_tokens)
@@ -95,20 +102,16 @@ def preflight(a):
     from vllm.plugins import load_general_plugins
     load_general_plugins()
     from vllm.model_executor.models import ModelRegistry
-    config = json.loads((Path(a.model) / 'config.json').read_text())
-    is_w4a16 = config.get('quantization_config', {}).get('spark_format') == 'spark_int4_signed_output_pack_v1'
-    if is_w4a16 != a.w4a16:
-        raise RuntimeError('本地 W4A16 模型必须使用 --w4a16；该参数不能用于原 BF16 模型')
     archs = config.get('architectures', [])
     if not set(archs).intersection(ModelRegistry.get_supported_archs()):
         raise RuntimeError(
             f'当前 vLLM 未注册架构 {archs}。请先在当前 venv 安装模型 README 指定的 '
             'XHToken/Spark-plugin，并检查插件加载日志和 VLLM_PLUGINS 白名单。'
             '本脚本不会更改模型架构或用其他模型代替测试。')
-    if a.fused_decode and not a.w4a16 and getattr(ModelRegistry.models.get('Spark2_5ForCausalLM'),'module_name',None)!='utils.spark_fused_decode':
+    if a.fused_decode and getattr(ModelRegistry.models.get('Spark2_5ForCausalLM'),'module_name',None)!='utils.spark_fused_decode':
         raise RuntimeError('融合模型未注册；请先应用 spark-fused-register.patch')
-    if a.w4a16 and getattr(ModelRegistry.models.get('Spark2_5ForCausalLM'), 'module_name', None) != 'utils.spark_w4a16':
-        raise RuntimeError('W4A16 模型未注册；请检查 spark-w4a16-ascend 安装及插件白名单')
+    if a.int4 and getattr(ModelRegistry.models.get('Spark2_5ForCausalLM'), 'module_name', None) != 'utils.spark_int4':
+        raise RuntimeError('官方 INT4 模型未注册；请安装 spark-ascend 并检查插件白名单')
     return config
 
 
@@ -127,8 +130,8 @@ async def benchmark(a):
         raise RuntimeError('无法构造非特殊 token 输入')
     prompt = (seed * ((a.input_tokens + len(seed) - 1) // len(seed)))[:a.input_tokens]
     profiler_kwargs = {}
-    if a.w4a16:
-        profiler_kwargs['worker_extension_cls']='utils.spark_w4a16.W4A16WorkerExtension'
+    if a.int4:
+        profiler_kwargs['worker_extension_cls']='utils.spark_int4.Int4WorkerExtension'
     elif a.fused_decode:
         profiler_kwargs['worker_extension_cls']='utils.spark_fused_decode.SparkFusedWorkerExtension'
     if a.profile_dir:
@@ -222,35 +225,18 @@ async def benchmark(a):
                   'summary': {key: {'mean': statistics.mean(r[key] for r in rows),
                                     'median': statistics.median(r[key] for r in rows)}
                               for key in ('ttft_ms', 'tpot_ms', 'e2e_ms')}}
-        if a.w4a16:
+        if a.int4:
+            from utils.model_config import validate_audit
             audit = await engine.collective_rpc('spark_quant_audit')
             expected_calls = a.warmup * a.output_tokens + sum(row['output_tokens'] for row in rows)
-            if a.fused_decode:
-                # Native INT4 GEMM serves prefill; the custom kernel serves decode.
-                expected_calls = a.warmup + len(rows)
-            for worker in audit:
-                layers = worker['quantized_linear_layers']
-                if len(layers) != 144 or any(
-                    layer['weight_dtype'] != 'torch.int32'
-                    or layer['input_dtypes'] != ['torch.bfloat16']
-                    or layer['calls'] < expected_calls
-                    for layer in layers
-                ):
-                    raise RuntimeError('W4A16 运行时权重/激活/调用次数校验失败')
-                head=worker.get('decode_head',{})
-                if head.get('enabled'):
-                    expected_head_calls=a.warmup*(a.output_tokens-1)+sum(row['output_tokens']-1 for row in rows)
-                    if not a.fused_decode or head['calls']!=expected_head_calls:
-                        raise RuntimeError('W4A16 decode head 调用次数校验失败')
-            if not audit:
-                raise RuntimeError('没有获取到 W4A16 worker 审计')
-            result['w4a16_worker_audit'] = audit
-            result['versions']['spark-w4a16-ascend'] = version('spark-w4a16-ascend')
-            desc = Path(a.model) / 'quant_model_description.json'
-            plugin = ROOT / 'utils/spark_w4a16.py'
-            result['w4a16'] = {
-                'quant_description': json.loads(desc.read_text()),
-                'quant_description_sha256': hashlib.sha256(desc.read_bytes()).hexdigest(),
+            validate_audit(audit, expected_calls)
+            result['int4_worker_audit'] = audit
+            result['versions']['spark-ascend'] = version('spark-ascend')
+            config_path = Path(a.model) / 'config.json'
+            plugin = ROOT / 'utils/spark_int4.py'
+            result['int4'] = {
+                'quantization_config': json.loads(config_path.read_text())['quantization_config'],
+                'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
                 'plugin_source_sha256': hashlib.sha256(plugin.read_bytes()).hexdigest(),
                 'runtime_bookkeeping_enabled': True,
             }
@@ -270,7 +256,7 @@ async def benchmark(a):
                 raise RuntimeError(f'融合 worker 加载库与结果不符：{status}')
             manifest_path=library.parent/'execution.json'
             manifest_data=json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-            generated=library.parent/manifest_data.get('source', 'decode_layer_w4a16.asc' if a.w4a16 else 'decode_layer_stage_prefetch.asc')
+            generated=library.parent/manifest_data.get('source', 'decode_layer_stage_prefetch.asc')
             manifest=library.parent/'execution.json'
             result['fused_kernel']['baseline_source_sha256']=result['fused_kernel']['source_sha256']
             if generated.is_file():

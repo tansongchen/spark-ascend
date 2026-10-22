@@ -1,9 +1,9 @@
-"""Lazy, opt-in registration; ordinary BF16 model registration is unaffected."""
+"""Lazy registration of the upstream Spark INT4 Ascend adapter."""
 import os
 
 
-def register_w4a16():
-    if os.environ.get("SPARK_W4A16") != "1":
+def register_int4():
+    if os.environ.get("SPARK_INT4") != "1":
         return
     from vllm_spark2_5_plugin import register as register_spark
     from vllm import ModelRegistry
@@ -11,5 +11,5 @@ def register_w4a16():
     register_spark()
     ModelRegistry.register_model(
         "Spark2_5ForCausalLM",
-        "utils.spark_w4a16:SparkW4A16ForCausalLM",
+        "utils.spark_int4:SparkInt4ForCausalLM",
     )

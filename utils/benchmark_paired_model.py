@@ -34,7 +34,7 @@ def identity(path):
 async def run(a):
     from benchmark import preflight
     envargs = SimpleNamespace(model=a.model, npu=a.npu, fused_decode=True,
-                              fused_graph=False, w4a16=False, input_tokens=a.input_tokens,
+                              fused_graph=False, enforce_eager=True, input_tokens=a.input_tokens,
                               output_tokens=a.output_tokens, fused_library=a.baseline,
                               validation_dir=None, force_tokens_from=None)
     preflight(envargs)
@@ -157,7 +157,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--baseline', default='/data1/t00995472/spark-kernel-validation/build/libdecode_layer_stage_prefetch.so')
     p.add_argument('--candidate', required=True)
-    p.add_argument('--model', default='/data1/t00995472/models/Spark-X2.5-4B')
+    p.add_argument('--model', required=True, help='显式 BF16 checkpoint')
     p.add_argument('--npu', type=int, default=2)
     p.add_argument('--input-tokens', type=int, default=32768)
     p.add_argument('--output-tokens', type=int, default=4096)

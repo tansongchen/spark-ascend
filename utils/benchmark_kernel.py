@@ -13,129 +13,6 @@ sys.path.insert(0, str(ROOT))
 from utils.kernel_catalog import KERNELS
 
 
-def check_kv_codec(a):
-    import torch
-    import torch_npu  # noqa: F401
-    from utils.validate_kernel import stats
-    torch.set_num_threads(8);torch.manual_seed(a.seed);torch.npu.set_device(0)
-    n=65536
-    src=(torch.randn(n)*6).bfloat16()
-    src[:24]=torch.tensor([-65504,-512,-448,-384,-240,-16,-1,-.001953125,-0.,0.,
-                          .001953125,.01,1,7.5,15,240,384,448,512,65504,
-                          -1e-20,1e-20,-.015625,.015625]).bfloat16()
-    expected=src.float().clamp(-448,448).to(torch.float8_e4m3fn)
-    x=src.npu();encoded=torch.full((n+128,),0xa5,dtype=torch.uint8,device='npu')
-    decoded=torch.full((n+128,),float('nan'),dtype=torch.bfloat16,device='npu')
-    lib=ctypes.CDLL(str(a.build/KERNELS[a.kernel].library));fn=lib.launch_reborn_kv8_codec
-    fn.argtypes=[ctypes.c_void_p]*3+[ctypes.c_int]*2;fn.restype=None
-    stream=torch.npu.current_stream();stream.synchronize()
-    fn(stream.npu_stream,x.data_ptr(),encoded.data_ptr(),n,0)
-    fn(stream.npu_stream,encoded.data_ptr(),decoded.data_ptr(),n,1);stream.synchronize()
-    q,y=encoded.cpu(),decoded.cpu()
-    checks={'encoded_bit_exact':torch.equal(q[:n],expected.view(torch.uint8)),
-            'decoded_bit_exact':torch.equal(y[:n].view(torch.int16),expected.bfloat16().view(torch.int16)),
-            'encoded_guard':bool((q[n:]==0xa5).all()),'decoded_guard':bool(y[n:].isnan().all())}
-    result={'checks':checks,'pass':all(checks.values()),'values':n,'physical_npu':a.npu,
-            'quantization':stats(y[:n],src),'format':'fp8_e4m3fn','saturate':True}
-    a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(result,indent=2)+'\n')
-    print(json.dumps(result,indent=2),flush=True)
-    return 0 if result['pass'] else 1
-
-
-def measure_linear(a):
-    """Screen a new GEMV primitive before integrating layer scheduling."""
-    import torch
-    import torch_npu  # noqa: F401
-    from safetensors import safe_open
-    from utils.w4a16_packing import unpack_checkpoint, pack_outer
-    from utils.validate_kernel import stats
-    torch.set_num_threads(8)
-    torch.manual_seed(a.seed)
-    torch.npu.set_device(0)
-    model = a.model or Path('/data1/t00995472/models/Spark-X2.5-4B-W4A16-G128')
-    index = json.loads((model/'model.safetensors.index.json').read_text())['weight_map']
-    names = {'qkv':['self_attn.q_k_v_proj'], 'out':['self_attn.out_proj'],
-             'gate_up':['mlp.gate_proj','mlp.up_proj'], 'down':['mlp.down_proj'],
-             'lm_head':[]}[a.linear_only]
-    qs, ss = [], []
-    def read(key):
-        with safe_open(model/index[key], framework='pt') as f:
-            return f.get_tensor(key)
-    for name in names:
-        key = f'model.layers.{a.layer}.{name}'
-        q,s = unpack_checkpoint(read(key+'.weight'),read(key+'.weight_scale'))
-        qs.append(q); ss.append(s)
-    original = None
-    if a.linear_only == 'lm_head':
-        from utils.quantize_spark_w4a16 import quantize
-        original = read('model.embedding.weight')
-        words,scales,weight_error = quantize(original,128)
-        q,s = unpack_checkpoint(words,scales)
-    else:
-        q,s = torch.cat(qs),torch.cat(ss)
-    n,k = q.shape
-    groups = 8 if k == 4096 else 10
-    splits = k//(groups*128)
-    x = torch.randn(k).bfloat16()
-    w = (q.float()*s.float().repeat_interleave(128,1)).bfloat16()
-    ref = torch.mv(w.float(),x.float())
-    packed = pack_outer(q,s)
-    xd = x.npu()
-    weights = [packed.npu() for _ in range(a.weight_rotations)]
-    head = a.linear_only == 'lm_head'
-    y = torch.full((n+128,) if head else (n*splits+128,),float('nan'),device='npu',
-                   dtype=torch.bfloat16 if head else torch.float32)
-    partial = torch.empty(n*splits,device='npu',dtype=torch.float32) if head else None
-    libpath = a.build/KERNELS[a.kernel].library
-    lib = ctypes.CDLL(str(libpath))
-    fn = lib.launch_w4a16_reborn_head if head else lib.launch_w4a16_reborn_linear
-    fn.argtypes = [ctypes.c_void_p]*5+[ctypes.c_int] if head else [ctypes.c_void_p]*4+[ctypes.c_int]*3
-    fn.restype = None
-    stream = torch.npu.current_stream()
-    kind = {2560:0,4096:1,10240:2}[k]
-    iteration = 0
-    def launch():
-        nonlocal iteration
-        if head:
-            fn(stream.npu_stream,xd.data_ptr(),weights[iteration%len(weights)].data_ptr(),
-               partial.data_ptr(),y.data_ptr(),n)
-        else:
-            fn(stream.npu_stream,xd.data_ptr(),weights[iteration%len(weights)].data_ptr(),
-               y.data_ptr(),n,kind,a.cores)
-        iteration += 1
-    stream.synchronize()
-    launch(); stream.synchronize()
-    actual = y[:n].cpu() if head else y[:n*splits].reshape(n//128,splits,128).sum(1).flatten().cpu()
-    accuracy = stats(actual,ref)
-    guard = bool(y[n if head else n*splits:].isnan().all())
-    if not accuracy['finite'] or not guard:
-        raise RuntimeError(f'Linear output failed: {accuracy}, guard={guard}')
-    for _ in range(a.warmup): launch()
-    stream.synchronize()
-    observations=[]
-    for _ in range(a.runs):
-        start,end = torch.npu.Event(enable_timing=True),torch.npu.Event(enable_timing=True)
-        start.record(); stream.synchronize()
-        for _ in range(a.iterations): launch()
-        end.record();end.synchronize()
-        observations.append(start.elapsed_time(end)*1000/a.iterations)
-    result={'kernel':a.kernel,'matrix':a.linear_only,'n':n,'k':k,'splits':splits,
-            'physical_npu':a.npu,'cores':56 if head else a.cores,'layer':a.layer,'accuracy':accuracy,
-            'guard':guard,'mean_us':statistics.mean(observations),'observations_us':observations,
-            'packed_bytes':packed.numel(),'rotating_weights':len(weights),
-            'library_sha256':hashlib.sha256(libpath.read_bytes()).hexdigest(),
-            'scope':'linear partial sums only; excludes final K merge and full-model overhead'}
-    if head:
-        result['scope'] = 'complete W4A16 decode head including final K merge; constructed BF16 activation'
-        result['head_quantization'] = {'relative_weight_l2':weight_error,
-            'logits_against_original_bf16':stats(actual,torch.mv(original.float(),x.float())),
-            'quality_benchmark':False}
-    a.output.parent.mkdir(parents=True,exist_ok=True)
-    a.output.write_text(json.dumps(result,indent=2)+'\n')
-    print(json.dumps(result,indent=2),flush=True)
-    return 0 if accuracy['pass'] else 1
-
-
 def measure(context):
     import torch
     from utils.validate_kernel import stats
@@ -239,7 +116,7 @@ def main(argv=None):
     p.add_argument('--kernel', choices=KERNELS, default='stage_prefetch')
     p.add_argument('--build', type=Path, required=True, help='共享库及 execution.json 所在目录')
     p.add_argument('--npu', type=int, choices=range(1,8), default=2)
-    p.add_argument('--model', type=Path, help='真实权重模型；W4A16 默认选量化模型')
+    p.add_argument('--model', type=Path, required=True, help='显式 BF16 checkpoint；不支持官方混合 INT4/INT8')
     p.add_argument('--layer', type=int, choices=range(36), default=0)
     p.add_argument('--length', type=int, default=128)
     p.add_argument('--slot32', action='store_true')
@@ -252,16 +129,11 @@ def main(argv=None):
     p.add_argument('--weight-rotations', type=int, default=1)
     p.add_argument('--cache-banks', type=int, default=1)
     p.add_argument('--profile', help='可选独立 profiler 采集目录')
-    p.add_argument('--linear-only', choices=['qkv','out','gate_up','down','lm_head'], help='验证独立新线性层；lm_head 包含最终合并')
-    p.add_argument('--cores', type=int, default=56, help='独立线性层原型的 AIV 数')
-    p.add_argument('--kv-codec-only', action='store_true', help='独立检查 FP8 KV 编码、解码和保护区')
     p.add_argument('--health-interval', type=float, default=0, help='设备采样间隔秒；0 关闭')
     p.add_argument('--debug')
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(argv)
     a.up_tile, a.down_tile, a.transpose_down = 8, 4, False
-    if a.kernel == 'w4a16_reborn':
-        a.up_tile = a.down_tile = 128
     if not 1 <= a.length <= 40960 or not 1 <= a.repeat <= 10:
         p.error('length 应为 1..40960，repeat 应为 1..10')
     if a.warmup < 0 or min(a.iterations,a.runs,a.weight_rotations,a.cache_banks) < 1:
@@ -273,30 +145,14 @@ def main(argv=None):
         p.error('--kernel 与构建 manifest 不一致')
     if a.kernel == 'lossless_prefetch' and manifest.get('weight_encoding') != 'bf16_lossless12':
         p.error('无损 kernel 必须携带 weight_encoding=bf16_lossless12 的 execution.json')
-    if a.variant == 'w4a16' and manifest.get('weight_encoding') != KERNELS[a.kernel].manifest['weight_encoding']:
-        p.error('W4A16 kernel 必须携带匹配权重布局的 execution.json')
     if a.baseline_library and a.variant != 'stage_prefetch':
         p.error('配对基线仅支持共用 QKV/O 布局的 stage_prefetch ABI')
     if not (a.build/KERNELS[a.kernel].library).is_file():
         p.error(f'共享库不存在：{a.build/KERNELS[a.kernel].library}')
     from utils.device import select_idle_npu
     select_idle_npu(a.npu)
-    if a.kv_codec_only:
-        return check_kv_codec(a)
-    if a.linear_only:
-        if not (manifest.get('linear_probe') or manifest.get('linear_probe_only')):
-            p.error('--linear-only 需要包含独立线性层入口的构建')
-        return measure_linear(a)
-    if manifest.get('linear_probe_only'):
-        p.error('该构建尚为独立线性层原型，需要 --linear-only')
     from utils import validate_kernel as v
     from utils.telemetry import record_device
-    if a.variant == 'w4a16':
-        from utils.w4a16_reference import make_reference
-        model = a.model or Path('/data1/t00995472/models/Spark-X2.5-4B-W4A16-G128')
-        loader, packer = make_reference(model, manifest['weight_encoding'])
-        with record_device(a.npu, str(a.output)+'.health.json', a.health_interval):
-            return v.run(a, weights_loader=loader, input_packer=packer, after_validation=measure)
     if a.model: v.MODEL = a.model
     with record_device(a.npu, str(a.output)+'.health.json', a.health_interval):
         return v.run(a, after_validation=measure)

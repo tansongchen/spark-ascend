@@ -28,10 +28,8 @@ def main():
         "pyproject.toml", "utils/register_spark.py",
         "benchmark.py", "utils/packing.py", "utils/bf16_codec.py",
         "utils/spark_fused_decode.py",
-        "utils/spark_w4a16_fused.py",
-        "utils/spark_w4a16.py",
-        "utils/quantize_spark_w4a16.py",
-        "utils/w4a16_packing.py")]
+        "utils/spark_int4.py", "utils/model_config.py",
+        "utils/int4_packing.py")]
     snapshot = a.directory / "sources"
     for f in files:
         target = snapshot / f.relative_to(ROOT)

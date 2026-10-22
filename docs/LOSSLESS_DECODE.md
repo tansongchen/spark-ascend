@@ -1,5 +1,7 @@
 # BF16 无损压缩：减少 MLP 权重读取
 
+本文记录旧 Spark-X2.5-4B BF16 checkpoint 的历史实验。当前默认模型已切换为官方 Spark-X2.6-4B-INT4，本算子和本文数值不适用于该混合量化 checkpoint。所有 BF16 工具须显式指定 `--model`。
+
 本方案在 BF16 融合基线 `stage_prefetch` 上压缩 MLP 权重的存储表示，计算前逐位恢复全部 16 位，再执行原 GEMV。计算 dtype、累加顺序和 BF16 舍入边界保持不变。交付实现为 `lossless_prefetch`，完整模型历史 TPOT 约 **6.82 ms/token**。
 
 构建与模型运行见 [README](../README.md)。
@@ -73,11 +75,11 @@ python -B utils/validate_bf16_codec.py --npu 2 \
   --output "$SPARK_RESULTS/codec.json"
 
 # 全部真实 MLP 权重；--layers 0 可做单层抽查
-python -B utils/validate_bf16_model_codec.py \
+python -B utils/validate_bf16_model_codec.py --model "$SPARK_BF16_MODEL" \
   --output "$SPARK_RESULTS/model-codec.json"
 
 # 完整模型 AB/BA 对照
-python -B utils/benchmark_paired_model.py --npu 2 \
+python -B utils/benchmark_paired_model.py --npu 2 --model "$SPARK_BF16_MODEL" \
   --baseline "$SPARK_BUILD/stage/libdecode_layer_stage_prefetch.so" \
   --candidate "$SPARK_BUILD/lossless/libdecode_layer_stage_prefetch.so" \
   --result "$SPARK_RESULTS/paired.json"

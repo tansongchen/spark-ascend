@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "spark-w4a16-ascend"
-version = "0.1.0"
-description = "Opt-in Spark Dense INT4/BF16 adapter for vLLM Ascend 0.23"
+name = "spark-ascend"
+version = "0.2.0"
+description = "Upstream Spark-X2.6 mixed INT4/INT8 adapter for vLLM Ascend 0.23"
 requires-python = ">=3.12"
 
 [project.entry-points."vllm.general_plugins"]
-spark_w4a16 = "utils.register_spark:register_w4a16"
+spark_int4 = "utils.register_spark:register_int4"
 
 [tool.setuptools]
 packages = ["utils"]
